@@ -5,10 +5,22 @@ Docker container management and monitoring service for the Forks Life ecosystem.
 ## Quick Start
 
 ```bash
-docker compose up -d
+# Build and install the binary, then restart the systemd service
+./__rebuild.sh
+```
+
+The service is managed by systemd as `supervisor.service`:
+
+```bash
+systemctl status supervisor
+systemctl restart supervisor
+journalctl -u supervisor -f
 ```
 
 ## Configuration
+
+Configuration is read from `/app/forks-life-supervisor/.env` (loaded by the
+systemd unit via `EnvironmentFile`).
 
 | Variable | Default | Description |
 |---|---|---|
@@ -73,8 +85,8 @@ The panel calls `/sv/api/...`; because both `location` and `proxy_pass` end with
 a trailing slash, nginx strips `/sv` and forwards `/api/...` to the supervisor
 listening on `127.0.0.1:9000` (matching `SUPERVISOR_HOST` / `SUPERVISOR_PORT`).
 The supervisor must be reachable from the nginx host: run it on the same machine,
-or change `proxy_pass` to the host/IP and port where the container is published
-(`-p 9000:9000`). Then reload nginx:
+or change `proxy_pass` to the host/IP and port where it listens. Then reload
+nginx:
 
 ```bash
 nginx -t && systemctl reload nginx
@@ -83,13 +95,45 @@ nginx -t && systemctl reload nginx
 ## Build from Source
 
 ```bash
-go build -o supervisor ./cmd/supervisor/
-./supervisor
+go build -o /usr/local/bin/supervisor ./cmd/supervisor/
 ```
 
-## Docker
+## Deployment
+
+The supervisor runs natively on the host (not in a container) because it needs
+direct access to host resources:
+
+- `/etc/nginx/sites-available`, `/etc/nginx/sites-enabled` — nginx sites
+- `/etc/systemd/system`, `/lib/systemd/system` and `systemctl` — system services
+- `/var/run/docker.sock` — Docker containers
+- `/home/coin/go/bin/legacycoin-cli`, `/home/coin/.legacycoin` — LegacyCoin RPC
+
+### systemd unit
+
+`/etc/systemd/system/supervisor.service`:
+
+```ini
+[Unit]
+Description=Forks Life Supervisor
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/app/forks-life-supervisor
+EnvironmentFile=/app/forks-life-supervisor/.env
+ExecStart=/usr/local/bin/supervisor
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
 
 ```bash
-docker build -t forks-life-supervisor .
-docker run -p 9000:9000 -v /var/run/docker.sock:/var/run/docker.sock:ro forks-life-supervisor
+systemctl daemon-reload
+systemctl enable --now supervisor
 ```

@@ -3,17 +3,17 @@ set -e
 
 cd "$(dirname "$0")"
 
-echo '==> Stopping and removing supervisor...'
-docker compose down
+GO="${GO:-/usr/local/go/bin/go}"
+BIN=/usr/local/bin/supervisor
+SERVICE=supervisor
 
-echo '==> Removing old supervisor image...'
-docker rmi -f forks-life-supervisor-supervisor 2>/dev/null || true
-docker image prune -f
+echo '==> Building supervisor binary...'
+"$GO" build -o "$BIN" ./cmd/supervisor/
 
-echo '==> Rebuilding image...'
-docker compose build supervisor
+echo '==> Restarting systemd service...'
+systemctl restart "$SERVICE"
 
-echo '==> Starting container...'
-docker compose up -d supervisor
+echo '==> Status:'
+systemctl status "$SERVICE" --no-pager | head -8
 
 echo '==> Done, supervisor rebuilt and running.'

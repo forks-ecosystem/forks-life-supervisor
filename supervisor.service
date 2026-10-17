@@ -1,0 +1,16 @@
+[Unit]
+Description=Forks Life Supervisor
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/app/forks-life-supervisor
+EnvironmentFile=/app/forks-life-supervisor/.env
+ExecStart=/usr/local/bin/supervisor
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
