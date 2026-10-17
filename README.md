@@ -66,9 +66,9 @@ curl http://localhost:9000/api/ports
 
 ## Nginx Reverse Proxy (PHP admin panel)
 
-On the server that hosts the PHP admin panel, expose the supervisor API under
-the `/sv/` prefix so the panel can reach it. Add this inside the panel's
-`server { ... }` block:
+The PHP admin panel is [forks-life-control](https://github.com/forks-ecosystem/forks-life-control).
+On the server that hosts it, expose the supervisor API under the `/sv/` prefix
+so the panel can reach it. Add this inside the panel's `server { ... }` block:
 
 ```nginx
 # LegacyCoin Supervisor admin panel
