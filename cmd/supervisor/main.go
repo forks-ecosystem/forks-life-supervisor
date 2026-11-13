@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -56,6 +57,7 @@ type ServiceInfo struct {
 	Active string `json:"active"`
 	Sub    string `json:"sub"`
 	PID    string `json:"pid"`
+	Port   string `json:"port,omitempty"`
 }
 
 type NginxSite struct {
@@ -472,7 +474,99 @@ func systemctlStatus(name string) (*ServiceInfo, error) {
 	default:
 		svc.State = svc.Active
 	}
+	// Порт: 1) из ExecStart юнита (--listen=host:port, --port=N, ...),
+	// 2) из фактически слушаемых сокетов процесса (ss по MainPID) —
+	// работает и для остановленных сервисов (юнит), и для запущенных (ss).
+	svc.Port = unitPort(name)
+	if svc.Port == "" && svc.PID != "" && svc.PID != "0" {
+		svc.Port = pidListenPorts(svc.PID)
+	}
 	return svc, nil
+}
+
+// unitPort достаёт порт из ExecStart юнит-файла. Порядок:
+// 1) флаги listen/port/addr с параметром, 2) любой токен host:port.
+func unitPort(name string) string {
+	for _, dir := range []string{"/etc/systemd/system", "/lib/systemd/system", "/usr/lib/systemd/system"} {
+		rawBytes, err := os.ReadFile(filepath.Join(dir, name+".service"))
+		if err != nil {
+			continue
+		}
+		raw := string(rawBytes)
+		var execStart string
+		for i, line := range strings.Split(raw, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "ExecStart=") && !strings.HasPrefix(trimmed, "ExecStartPre=") {
+				continue
+			}
+			execStart = strings.TrimSpace(strings.SplitN(trimmed, "=", 2)[1])
+			// склейка продолжения строки через бэкслеш
+			for strings.HasSuffix(execStart, "\\") && i+1 < len(strings.Split(raw, "\n")) {
+				execStart = strings.TrimSpace(strings.TrimSuffix(execStart, "\\")) +
+					" " + strings.TrimSpace(strings.Split(raw, "\n")[i+1])
+				break
+			}
+			break
+		}
+		if execStart == "" {
+			continue
+		}
+		if port := scanPortToken(execStart); port != "" {
+			return port
+		}
+	}
+	return ""
+}
+
+var portFlagValRe = regexp.MustCompile(`(?:^|\s)--?[A-Za-z_.-]*(?:listen|port|addr)[= ]+((?:https?://)?[^\s'"]+)`)
+var tailPortRe = regexp.MustCompile(`:?(\d{2,5})$`)
+var hostPortRe = regexp.MustCompile(`(?:^|[\s=])(?:[A-Za-z0-9._-]+):(\d{2,5})(?:\s|$)`)
+
+// scanPortToken вытаскивает порт из строки запуска: сначала значение флага
+// listen/port/addr (--listen=1.2.3.4:8138, --server.port=8480, --rpcport 9555),
+// затем любой host:port токен.
+func scanPortToken(s string) string {
+	if m := portFlagValRe.FindStringSubmatch(s); m != nil {
+		if pm := tailPortRe.FindStringSubmatch(m[1]); pm != nil {
+			return pm[1]
+		}
+	}
+	if m := hostPortRe.FindStringSubmatch(s); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// pidListenPorts возвращает порты, которые процесс с данным PID слушает
+// (ss -tlnpH). Несколько портов через запятую, адреса дедуплицируются.
+func pidListenPorts(pid string) string {
+	out, err := exec.Command("ss", "-tlnpH").Output()
+	if err != nil {
+		return ""
+	}
+	want := fmt.Sprintf("pid=%s,", pid)
+	seen := map[string]bool{}
+	var ports []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, want) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		local := fields[3] // local address:port
+		idx := strings.LastIndex(local, ":")
+		if idx < 0 {
+			continue
+		}
+		port := local[idx+1:]
+		if port != "" && !seen[port] {
+			seen[port] = true
+			ports = append(ports, port)
+		}
+	}
+	return strings.Join(ports, ",")
 }
 
 func discoverServices() []string {
